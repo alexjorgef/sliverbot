@@ -1,0 +1,526 @@
+#!/usr/bin/env node
+
+// External Requires
+const program = require('commander');
+const request = require('request');
+const url = require('url')
+const rl = require('readline');
+const fs = require('fs');
+var async = require('async');
+// Internal Requires
+
+// commander arguments
+program
+    .option('--test [value]', 'Test')
+    .parse(process.argv)
+
+var args = program.args;
+
+// pre: need to have arguments
+if (!args.length) {
+    process.exit(1);
+}
+
+// DB
+var username = "";
+var password = "";
+var user_id = "";
+var access_token = "";
+var coins = 0;
+var stream_id = ""; //videkyqmvcq4d0ugz9d
+var open_raffles = [];
+var current_stream_id = "";
+var quizzes_answered = [];
+
+// API
+const api_prefix = "https://api.sliver.tv/v1/";
+
+const api_login = "user/auth";
+const api_user_info = "user/";
+const api_startup = "startup";
+const api_live = "live/";
+const api_channel = "user/usr0000000000000001/channel";
+const api_inventory = "inventory/";
+const api_raffles = "subject/usr0000000000000001/list_raffles";
+const api_programs = "channel/usr0000000000000001/list_programs?need_raffles=true";
+const api_raffle = "raffle/";
+
+const api_suffix_need_bet = "?need_bet=true";
+const api_suffix_list = "list?number=500";
+
+const userSecrets = JSON.parse(fs.readFileSync("user-secrets.json"));
+
+console.log("Sliver BOT v0.1");
+console.log("----------");
+
+function getCredentials(callback) {
+
+    const r = rl.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    r.question('Username: ', (uname) => {
+        r.question('Password: ', (pword) => {
+            username = uname;
+            password = pword;
+            r.close();
+            callback(null, "getCredentials")
+        });
+    });
+
+}
+
+function enterRaffle(raffleId, amount) {
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        json: {
+            "amount": amount,
+            "user": {
+                "id": user_id
+            }
+        },
+        url: api_prefix + api_raffle + raffleId + "/tickets",
+        method: "POST"
+    }, function (err, res, payload) {
+
+        if (!err && res.statusCode === 200) {
+            json = JSON.parse(payload);
+            console.log("Entering raffle - " + json.body.item.description);
+        } else
+            console.log("USE BUFF FAILED!")
+    });
+}
+
+function get_program_list() {
+
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        url: api_prefix + api_programs,
+        method: "GET"
+    }, function (err, res, payload) {
+        if (!err && res.statusCode === 200) {
+            json = JSON.parse(payload);
+            json.body.forEach(function (stream_item) {
+                // console.log(program_item.id);
+                if (stream_item.status == "live") {
+                    if(current_stream_id != stream_item.id){
+                        current_stream_id = stream_item.id;
+                        console.log("NEW STREAM! id: " + current_stream_id);
+                        quizzes_answered = [];
+                    }
+                    if(stream_item.raffles != null){
+                        stream_item.raffles.forEach(function (raffle_item) {
+                            if (raffle_item.status == "open") {
+                                raffle_item.quizzes.forEach(function (quizz_item) {
+                                    if (quizz_item.status == "open") {
+                                        if (quizz_item.type == "trivia") {
+
+                                            if(quizz_item.remaining_time < 15){
+
+                                                // trivia question and we have data do decide!
+                                                console.log("[Trivia] " + quizz_item.text);
+
+                                                var maxCount = 0;
+                                                var decision = 0;
+
+
+                                                quizz_item.choices.forEach(function (choice_item, index) {
+                                                    console.log(choice_item.text);
+                                                    if (choice_item.count > maxCount) {
+                                                        maxCount = choice_item.count;
+                                                        decision = index;
+                                                    }
+                                                });
+
+                                                vote_quizz(quizz_item.id, decision, quizz_item.min_stake);
+                                            }
+
+                                        } else {
+
+                                            var maxCount = 0;
+                                            var decision = 0;
+                                            var votes = 0;
+
+                                            quizz_item.choices.forEach(function (choice_item, index) {
+                                                if (choice_item.count > maxCount) {
+                                                    decision = index;
+                                                    maxCount = choice_item.count;
+                                                }
+                                                votes += choice_item.count;
+                                            });
+
+                                            if (votes > 100) {
+                                                if(!quizzes_answered.includes(quizz_item.id)){
+                                                    console.log("[Quizz] " + quizz_item.text);
+                                                    console.log("ready to vote! " + votes + " voted already!");
+                                                    vote_quizz(quizz_item.id, decision, quizz_item.min_stake);
+                                                    quizzes_answered.push(quizz_item.id);
+                                                }
+                                            }else{
+                                                console.log("Waiting for 100 votes");
+                                            }
+                                        }
+                                        //console.log("Remaining: " + quizz_item.remaining_time);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }
+                else if (stream_item.status == "waiting" || stream_item.status == "closed") {
+                    // console.log("TODO")
+                }
+            });
+        } else
+            console.log("GET PROGRAMS FAILED!")
+    });
+}
+
+function getInitialData(callback) {
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        url: url.resolve(api_prefix, api_raffles),
+        method: "GET"
+    }, function (err, res, payload) {
+        if (!err && res.statusCode === 200) {
+            json = JSON.parse(payload);
+            json.body.forEach(function (raffle_item) {
+                if (raffle_item.status == "open" && raffle_item.description.indexOf("US participants only") == -1) {
+                    open_raffles.push(raffle_item);
+                }
+                else if (raffle_item.status == "waiting" || raffle_item.status == "closed") {
+                    // console.log("TODO")
+                }
+            });
+
+            console.log("Open raffles:");
+            open_raffles.forEach(function(raffle){
+               console.log(raffle.name)
+            });
+        } else
+            console.log("GET RAFFLES FAILED!")
+    });
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        url: url.resolve(api_prefix, api_channel),
+        method: "GET"
+    }, function (err, res, payload) {
+        if (!err && res.statusCode === 200) {
+            json = JSON.parse(payload);
+            stream_id = json.body.live_stream_id;
+        } else
+            console.log("GET CHANNEL FAILED!")
+    });
+    callback(null, "getInitialData");
+}
+
+function get_user_data() {
+
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        url: url.resolve(api_prefix, url.resolve(api_user_info, user_id)),
+        method: "GET"
+    }, function (err, res, payload) {
+        if (!err && res.statusCode === 200) {
+            json = JSON.parse(payload);
+            rafflesid = [];
+            if (coins != json.body.coins) {
+                coins = json.body.coins;
+                console.log("Coins: " + coins);
+            }
+        } else
+            console.log("GET LIVE FAILED!")
+    });
+
+}
+
+function login(callback) {
+
+    request({
+        headers: {
+            "X-Platform": "web"
+        },
+        url: api_prefix + api_login,
+        method: "POST",
+        json: {
+            "email_or_username": username,
+            "password": password
+        }
+    }, function (err, res, json) {
+        if (!err && res.statusCode === 200) {
+            user_id = json.body.id;
+            access_token = json.body.access_token;
+            coins = json.body.coins;
+            callback(null, "login")
+        } else {
+            console.log("LOGIN FAILED!");
+            callback(new Error("login failed"), null);
+        }
+    });
+
+}
+
+function enterRaffle(raffleId, amount) {
+
+    console.log("Entering raffle with " + amount + " coins");
+
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        json: {
+            "amount": amount,
+            "user": {
+                "id": user_id
+            }
+        },
+        url: api_prefix + api_raffle + raffleId + "/tickets",
+        method: "POST"
+    }, function (err, res, json) {
+
+        if (!err && res.statusCode === 200) {
+            console.log("Entered raffle!");
+            coins -= amount;
+        } else
+            console.log("ENTER RAFFLE FAILED!")
+    });
+
+}
+
+function live() {
+
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        url: url.resolve(api_prefix, url.resolve(api_live, url.resolve(stream_id, api_suffix_need_bet))),
+        method: "GET"
+    }, function (err, res, json) {
+        if (!err && res.statusCode === 200) {
+            //console.log(json);
+            //callback(null,"live");
+        } else
+            console.log("GET LIVE FAILED!")
+    });
+
+}
+
+function get_inventory() {
+
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        url: url.resolve(api_prefix, url.resolve(api_user_info, user_id + "/" + api_inventory + api_suffix_list)),
+        method: "GET"
+    }, function (err, res, payload) {
+
+        if (!err && res.statusCode === 200) {
+            json = JSON.parse(payload);
+            json.body.forEach(function (inventory_item) {
+                console.log(inventory_item.type + ": " + inventory_item.item.name);
+                if (inventory_item.type == "crate") {
+                    var crate_id = inventory_item.id;
+                    open_crate(crate_id);
+                }
+                else if (inventory_item.type == "coins" || inventory_item.type == "buff") {
+                    activate_item(inventory_item.id, inventory_item.type);
+                }
+            });
+        } else
+            console.log("GET INVENTORY FAILED!")
+    });
+
+}
+
+function open_crate(crate_id) {
+
+    // TODO - NEEDS TESTING
+
+    console.log("Opening crate... ");
+
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        url: url.resolve(api_prefix, url.resolve(api_inventory, crate_id)),
+        method: "POST"
+    }, function (err, res, payload) {
+
+        if (!err && res.statusCode === 200) {
+            json = JSON.parse(payload);
+            item_type = json.body.type;
+            console.log("Found " + item_type + ": " + json.body.item.name + " (" + json.body.item.value + ") ");
+            if (item_type == "buff" || item_type == "coins") {
+                var item_id = json.body.id;
+                activate_item(item_id, item_type);
+            }else{
+                push_notif(json.body.item.name, json.body.item.value); //TODO
+            }
+        } else
+            console.log("OPEN CRATE FAILED!")
+    });
+
+}
+
+function activate_item(id, type) {
+
+    console.log("Activating " + type + "... ");
+
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        url: url.resolve(api_prefix, url.resolve(api_inventory, id)),
+        method: "POST"
+    }, function (err, res, payload) {
+        if (!err && res.statusCode === 200) {
+            json = JSON.parse(payload);
+            console.log("Activated " + type + " - " + json.body.item.description);
+        } else
+            console.log("USE BUFF FAILED!")
+    });
+
+}
+
+function vote_quizz(id, decision, amount) {
+
+    request({
+        headers: {
+            "X-Platform": "web",
+            "X-App-Version": 4,
+            "X-Auth-Token": access_token,
+            "X-Auth-User": user_id
+        },
+        url: api_prefix + api_user_info + user_id + "/bet",
+        json: {
+            "item": id,
+            "details": {
+                "stake": amount,
+                "choice": decision
+            }
+        },
+        method: "POST"
+    }, function (err, res, json) {
+        if (!err && res.statusCode === 200) {
+            console.log("Voted!")
+        } else
+            console.log("VOTE QUIZZ FAILED!")
+    });
+
+}
+
+function push_notif(item,value){
+
+    if(!userSecrets.ifttt_key || !userSecrets.ifttt_event){
+        console.log("Update your secrets to receive push notifications!");
+        console.log('"ifttt_key": "your_key"');
+        console.log('"ifttt_event": "your_event_name"');
+    }else{
+
+        request({
+            url: "https://maker.ifttt.com/trigger/" + userSecrets.ifttt_event + "/with/key/" + userSecrets.ifttt_key,
+            json: {
+                "value1": item,
+                "value2": value
+            },
+            method: "POST"
+        }, function (err, res, json) {
+            if (!err && res.statusCode === 200) {
+                console.log("PUSHED NOTIFICATION!")
+            } else
+                console.log("NOTIFICATION FAILED!")
+        });
+
+    }
+
+}
+
+function fetchCycle(callback) {
+    setInterval(tick, 10000);
+    callback(null, "fetchCycle");
+}
+
+function tick() {
+    live();
+    get_user_data();
+    get_program_list();
+    get_inventory();
+
+    if(coins > 4000){
+        var nr_raffles = open_raffles.length;
+        var max_cash_to_spend = coins-2000;
+
+        if(open_raffles.length != 0)
+            open_raffles.forEach(function (raffle) {
+                enterRaffle(raffle.id, Math.floor(max_cash_to_spend/nr_raffles));
+            });
+    }
+}
+
+function run() {
+
+    operations = [];
+
+    if (!userSecrets.username || !userSecrets.password) {
+        operations.push(getCredentials);
+    } else {
+        username = userSecrets.username;
+        password = userSecrets.password;
+    }
+
+    operations.push(login);
+    operations.push(getInitialData);
+    operations.push(fetchCycle);
+
+    async.series(operations, function (err, res) {
+
+        if (err) {
+            console.log("> " + err)
+        }
+        //console.log(res);
+    });
+}
+
+run();

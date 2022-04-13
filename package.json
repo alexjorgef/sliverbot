@@ -1,0 +1,30 @@
+{
+  "name": "sliverbot",
+  "version": "0.10.0",
+  "description": "a clever bot",
+  "main": "bin/sliverbot.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "dependencies": {
+    "async": "^2.5.0",
+    "commander": "^2.2.0",
+    "request": "latest",
+    "fs": "latest"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "start": "node bin/sliverbot test",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alex1a/sliverbot.git"
+  },
+  "keywords": [
+    "bot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "homepage": "https://github.com/alex1a/sliverbot#readme"
+}
